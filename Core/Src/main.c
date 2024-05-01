@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "dht11.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,11 +51,86 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-
+#define DHT11_PORT GPIOB
+#define DHT11_PIN GPIO_PIN_9
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void delay_us (uint16_t us)
+{
+	TIM1->CNT = 0;
+	while (TIM1->CNT < us);  // wait for the counter to reach the us input in the parameter
+}
+void delay_ms (uint16_t ms)
+{
+	for (uint32_t i = 0; i < 1000*ms; i++){
+		delay_us(1);
+	}
+}
+
+uint8_t RHI, RHD, TCI, TCD, SUM;
+uint32_t pMillis, cMillis;
+float tCelsius = 0;
+float tFahrenheit = 0;
+float RH = 0;
+
+uint8_t DHT11_Start (void)
+{
+  uint8_t Response = 0;
+  GPIO_InitTypeDef GPIO_InitStructPrivate = {0};
+  GPIO_InitStructPrivate.Pin = DHT11_PIN;
+  GPIO_InitStructPrivate.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStructPrivate.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStructPrivate.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as output
+  HAL_GPIO_WritePin (DHT11_PORT, DHT11_PIN, GPIO_PIN_RESET);   // pull the pin low
+  HAL_Delay(20);   // wait for 20ms
+  HAL_GPIO_WritePin (DHT11_PORT, DHT11_PIN, GPIO_PIN_SET);   // pull the pin high
+  delay_us (30);   // wait for 30us
+  GPIO_InitStructPrivate.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStructPrivate.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(DHT11_PORT, &GPIO_InitStructPrivate); // set the pin as input
+  delay_us (40);
+  if (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)))
+  {
+    delay_us (80);
+    if ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN))) Response = 1;
+  }
+  pMillis = HAL_GetTick();
+  cMillis = HAL_GetTick();
+  while ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)) && pMillis + 2 > cMillis)
+  {
+    cMillis = HAL_GetTick();
+  }
+  return Response;
+}
+
+uint8_t DHT11_Read (void)
+{
+  uint8_t a,b;
+  for (a=0;a<8;a++)
+  {
+    pMillis = HAL_GetTick();
+    cMillis = HAL_GetTick();
+    while (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)) && pMillis + 2 > cMillis)
+    {  // wait for the pin to go high
+      cMillis = HAL_GetTick();
+    }
+    delay_us (40);   // wait for 40 us
+    if (!(HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)))   // if the pin is low
+      b&= ~(1<<(7-a));
+    else
+      b|= (1<<(7-a));
+    pMillis = HAL_GetTick();
+    cMillis = HAL_GetTick();
+    while ((HAL_GPIO_ReadPin (DHT11_PORT, DHT11_PIN)) && pMillis + 2 > cMillis)
+    {  // wait for the pin to go low
+      cMillis = HAL_GetTick();
+    }
+  }
+  return b;
+}
 
 /* USER CODE END 0 */
 
@@ -89,7 +164,7 @@ int main(void)
   MX_GPIO_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-
+	HAL_TIM_Base_Start(&htim1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -99,6 +174,24 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+		HAL_GPIO_TogglePin(led_GPIO_Port, led_Pin);
+		HAL_Delay(200);
+		if(DHT11_Start())
+    {
+      RHI = DHT11_Read(); // Relative humidity integral
+      RHD = DHT11_Read(); // Relative humidity decimal
+      TCI = DHT11_Read(); // Celsius integral
+      TCD = DHT11_Read(); // Celsius decimal
+      SUM = DHT11_Read(); // Check sum
+      if (RHI + RHD + TCI + TCD == SUM)
+      {
+        // Can use RHI and TCI for any purposes if whole number only needed
+        tCelsius = (float)TCI + (float)(TCD/10.0);
+        tFahrenheit = tCelsius * 9/5 + 32;
+        RH = (float)RHI + (float)(RHD/10.0);
+        // Can use tCelsius, tFahrenheit and RH for any purposes
+      }
+		}
   }
   /* USER CODE END 3 */
 }
@@ -161,9 +254,9 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 72;
+  htim1.Init.Prescaler = 72-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 65535-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -195,11 +288,35 @@ static void MX_TIM1_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 /* USER CODE BEGIN MX_GPIO_Init_1 */
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(led_GPIO_Port, led_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_9, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : led_Pin */
+  GPIO_InitStruct.Pin = led_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(led_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB9 */
+  GPIO_InitStruct.Pin = GPIO_PIN_9;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
